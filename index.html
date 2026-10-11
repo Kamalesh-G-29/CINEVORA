@@ -55,6 +55,7 @@
                 <button data-page="watchlist"><i class="fas fa-heart"></i> Watchlist</button>
                 <button data-page="compare"><i class="fas fa-arrows-left-right"></i> Compare</button>
                 <button data-page="profile"><i class="fas fa-user"></i> Profile</button>
+                <button data-page="admin" id="adminNavBtn" hidden><i class="fas fa-chart-line"></i> Admin</button>
             </div>
             <div class="search-wrap" id="searchWrap">
                 <div class="search-input-wrapper">
@@ -211,6 +212,20 @@
                     <canvas id="pieChart"></canvas>
                 </div>
                 <div class="ranking-list" id="rankingList"></div>
+            </div>
+        </div>
+
+        <!-- ─── ADMIN DASHBOARD ─── -->
+        <div class="admin-page" id="adminPage">
+            <div class="admin-header">
+                <div><span class="admin-eyebrow"><i class="fas fa-shield-halved"></i> CINEVORA CONTROL ROOM</span><h1>Admin Dashboard</h1><p>Monitor members, viewing trends, and platform activity.</p></div>
+                <button class="admin-refresh" id="adminRefreshBtn" title="Refresh dashboard"><i class="fas fa-rotate"></i> Refresh</button>
+            </div>
+            <div class="admin-stat-grid" id="adminStats"></div>
+            <div class="admin-grid">
+                <section class="admin-panel admin-activity-panel"><div class="admin-panel-heading"><div><span class="admin-kicker">LIVE PULSE</span><h2>User Activity</h2></div><i class="fas fa-wave-square"></i></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>User</th><th>Login</th><th>Logout</th><th>Usage</th><th>Status</th></tr></thead><tbody id="adminActivityRows"></tbody></table></div></section>
+                <section class="admin-panel"><div class="admin-panel-heading"><div><span class="admin-kicker">AUDIENCE FAVORITES</span><h2>Most Watched Movies</h2></div><i class="fas fa-ranking-star"></i></div><div class="admin-ranking" id="adminMostWatched"></div></section>
+                <section class="admin-panel admin-history-panel"><div class="admin-panel-heading"><div><span class="admin-kicker">CONTINUE WATCHING</span><h2>Recent Watch History</h2></div><i class="fas fa-clock-rotate-left"></i></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>User</th><th>Movie</th><th>Duration</th><th>Progress</th></tr></thead><tbody id="adminHistoryRows"></tbody></table></div></section>
             </div>
         </div>
 

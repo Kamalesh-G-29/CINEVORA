@@ -4,9 +4,22 @@ const fetch = require('node-fetch');
 const { getYear, isBlocked } = require('../utils/helpers');
 const { compareMovies } = require('../services/movieComparison');
 const { getCinevoraComparison } = require('../services/geminiComparison');
+const { getAudienceReception } = require('../services/audienceReception');
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
-const getApiKey = () => process.env.TMDB_API_KEY || '7248c5cc1f2080c7baf7361d2427fb80';
+const getApiKey = () => {
+  if (!process.env.TMDB_API_KEY) throw new Error('TMDB_API_KEY is not configured');
+  return process.env.TMDB_API_KEY;
+};
+
+const fetchTmdbResponse = async url => {
+  try {
+    return await fetch(url, { timeout: 10000 });
+  } catch (err) {
+    const code = err.code || err.type;
+    throw new Error(`TMDB request failed${code ? ` (${code})` : ''}`);
+  }
+};
 
 // Helper to call TMDB
 const tmdbFetch = async (endpoint, params = {}) => {
@@ -16,8 +29,12 @@ const tmdbFetch = async (endpoint, params = {}) => {
     language: 'en-US',
     ...params,
   });
-  const res = await fetch(url.toString());
-  return res.json();
+  const res = await fetchTmdbResponse(url.toString());
+  const data = await res.json();
+  if (!res.ok || data.status_code) {
+    throw new Error(data.status_message || `TMDB returned HTTP ${res.status}`);
+  }
+  return data;
 };
 
 // Filter movies
@@ -72,11 +89,13 @@ router.get('/discover', async (req, res) => {
   try {
     const { genre, language, sort } = req.query;
     const params = {
-      sort_by: sort || 'popularity.desc',
+      sort_by: sort || req.query.sort_by || 'popularity.desc',
       'vote_count.gte': 100,
     };
-    if (genre && genre !== 'all') params.with_genres = genre;
-    if (language && language !== 'all') params.with_original_language = language;
+    const selectedGenre = genre || req.query.with_genres;
+    const selectedLanguage = language || req.query.with_original_language;
+    if (selectedGenre && selectedGenre !== 'all') params.with_genres = selectedGenre;
+    if (selectedLanguage && selectedLanguage !== 'all') params.with_original_language = selectedLanguage;
     const data = await tmdbFetch('/discover/movie', params);
     res.json({ success: true, results: filterMovies(data.results) });
   } catch (err) {
@@ -88,7 +107,9 @@ router.get('/discover', async (req, res) => {
 router.get('/search/:query', async (req, res) => {
   try {
     const { query } = req.params;
-    const data = await tmdbFetch('/search/movie', { query });
+    const params = { query };
+    if (req.query.with_original_language) params.with_original_language = req.query.with_original_language;
+    const data = await tmdbFetch('/search/movie', params);
     res.json({ success: true, results: filterMovies(data.results) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -129,6 +150,22 @@ router.post('/compare-ai', async (req, res) => {
   } catch (err) {
     const status = err.message === 'GEMINI_API_KEY is not configured' ? 503 : 502;
     return res.status(status).json({ message: err.message });
+  }
+});
+
+router.get('/reception/:movieId', async (req, res) => {
+  const { movieId } = req.params;
+  if (!/^\d{1,12}$/.test(movieId)) {
+    return res.status(400).json({ success: false, message: 'A valid TMDB movie ID is required' });
+  }
+  try {
+    const data = await getAudienceReception(movieId);
+    return res.json({ success: true, data });
+  } catch (err) {
+    const status = err.message === 'Movie was not found on TMDB'
+      ? 404
+      : err.message === 'TMDB_API_KEY is not configured' ? 503 : 502;
+    return res.status(status).json({ success: false, message: err.message });
   }
 });
 

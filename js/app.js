@@ -27,8 +27,6 @@
         ];
 
         // ─── CONSTANTS ───
-        const TMDB_KEY = '7248c5cc1f2080c7baf7361d2427fb80';
-        const OMDb_KEY = '2deceaec';
         const IMG_BASE = 'https://image.tmdb.org/t/p/w500';
         const IMG_ORIGINAL = 'https://image.tmdb.org/t/p/original';
         const IMG_NA = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300"%3E%3Crect width="200" height="300" fill="%231a2332"/%3E%3Ctext x="100" y="150" font-family="sans-serif" font-size="18" fill="%2364748b" text-anchor="middle"%3ENo Image%3C/text%3E%3C/svg%3E';
@@ -56,8 +54,6 @@
         let watchlist = [];
         let recentlyViewed = [];
         let currentPage = 'home';
-        let lastSearchFunc = '';
-        let cachedOMDb = {};
         let browseMovies = [];
         let filteredBrowseMovies = [];
         let selectedGenre = 'all';
@@ -142,8 +138,10 @@
             return h > 0 ? `${h}h ${m}min` : `${m}min`;
         }
 
-        function sanitizeQuery(q) {
-            return q.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[char]);
         }
 
         // ─── COMPARE CATEGORIES ───
@@ -600,27 +598,22 @@
         const api = {
             tmdb: {
                 async get(endpoint, params = {}) {
-                    const url = new URL(`https://api.themoviedb.org/3/${endpoint}`);
-                    url.search = new URLSearchParams({ api_key: TMDB_KEY, language: 'en-US', ...params });
-                    return fetchJSON(url);
+                    const query = new URLSearchParams(params).toString();
+                    const response = await apiRequest(`/api/movies/${endpoint}${query ? `?${query}` : ''}`);
+                    return response.data || response;
                 },
-                async findById(imdbId) { return this.get(`find/${imdbId}`, { external_source: 'imdb_id' }); },
-                async details(type, id) { return this.get(`${type}/${id}`, { append_to_response: 'videos,credits' }); },
-                async trending() { return this.get('trending/movie/day'); },
-                async topRated() { return this.get('movie/top_rated'); },
-                async nowPlaying() { return this.get('movie/now_playing'); },
-                async popular() { return this.get('movie/popular'); },
-                async discover(params = {}) { return this.get('discover/movie', params); },
-                async search(query, params = {}) { return this.get('search/movie', { query, ...params }); }
-            },
-            omdb: {
-                async get(imdbId) {
-                    if (cachedOMDb[imdbId]) return cachedOMDb[imdbId];
-                    const url = new URL('https://www.omdbapi.com/');
-                    url.search = new URLSearchParams({ apikey: OMDb_KEY, i: imdbId, r: 'json' });
-                    const data = await fetchJSON(url);
-                    if (data && data.Response === 'True') cachedOMDb[imdbId] = data;
-                    return data;
+                async findById(imdbId) {
+                    const movie = await this.get(`find/${encodeURIComponent(imdbId)}`);
+                    return { movie_results: movie ? [movie] : [] };
+                },
+                async details(type, id) { return this.get(`detail/${encodeURIComponent(id)}`); },
+                async trending() { return this.get('trending'); },
+                async topRated() { return this.get('top-rated'); },
+                async nowPlaying() { return this.get('now-playing'); },
+                async popular() { return this.get('popular'); },
+                async discover(params = {}) { return this.get('discover', params); },
+                async search(query, params = {}) {
+                    return this.get(`search/${encodeURIComponent(query)}`, params);
                 }
             }
         };
@@ -688,6 +681,7 @@
             document.getElementById('avatarDisplay').textContent = currentUser.name ? currentUser.name[0].toUpperCase() : 'U';
             document.getElementById('dropdownUserName').textContent = currentUser.name || 'User';
             document.getElementById('dropdownUserEmail').textContent = currentUser.email || '';
+            document.getElementById('adminNavBtn').hidden = !(currentUser.role === 'admin' || currentUser.email === 'admin@cineverse.com');
             loadUserData();
             renderAll();
             toast(`Welcome back, ${currentUser.name || 'User'}!`, 'success');
@@ -719,6 +713,7 @@
             document.getElementById('movieDetailPage').classList.remove('active');
             document.getElementById('profilePage').classList.remove('active');
             document.getElementById('comparePage').classList.remove('active');
+            document.getElementById('adminPage').classList.remove('active');
             document.querySelectorAll('#navLinksContainer button').forEach(b => {
                 b.classList.toggle('active', b.dataset.page === page);
             });
@@ -746,8 +741,44 @@
                 document.getElementById('comparePage').classList.add('active');
                 renderCompareSelected();
                 window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else if (page === 'admin' && (currentUser?.role === 'admin' || currentUser?.email === 'admin@cineverse.com')) {
+                document.getElementById('adminPage').classList.add('active');
+                loadAdminDashboard();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
             closeVideoPlayer();
+        }
+
+        function adminFormatDuration(seconds) {
+            const totalMinutes = Math.max(0, Math.floor((Number(seconds) || 0) / 60));
+            return totalMinutes < 60 ? `${totalMinutes} min` : `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
+        }
+
+        function adminFormatTime(value) {
+            return value ? new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—';
+        }
+
+        function adminEmptyRow(colspan, message) {
+            return `<tr><td colspan="${colspan}" class="admin-empty">${message}</td></tr>`;
+        }
+
+        async function loadAdminDashboard() {
+            const stats = document.getElementById('adminStats');
+            if (!stats) return;
+            stats.innerHTML = '<div class="admin-loading">Loading platform metrics…</div>';
+            try {
+                const response = await apiRequest('/api/admin/summary');
+                const data = response.data || {};
+                stats.innerHTML = [['Total Users', data.users || 0, 'fa-users', 'members'], ['Active Users', data.activeSessions || 0, 'fa-signal', 'online now'], ['Total Movies', data.totalMovies || 0, 'fa-film', 'in watch history']].map(([label, value, icon, detail]) => `<div class="admin-stat"><div class="admin-stat-icon"><i class="fas ${icon}"></i></div><div><span>${label}</span><strong>${Number(value).toLocaleString()}</strong><small>${detail}</small></div></div>`).join('');
+                document.getElementById('adminActivityRows').innerHTML = (data.recentSessions || []).map(session => { const user = session.userId?.name || session.userId?.email || 'Unknown user'; return `<tr><td><strong>${user}</strong></td><td>${adminFormatTime(session.loginTime)}</td><td>${session.active ? '—' : adminFormatTime(session.logoutTime)}</td><td>${adminFormatDuration(session.duration)}</td><td><span class="admin-status ${session.active ? 'online' : ''}">${session.active ? 'Active' : 'Ended'}</span></td></tr>`; }).join('') || adminEmptyRow(5, 'No sessions recorded yet.');
+                document.getElementById('adminMostWatched').innerHTML = (data.mostWatched || []).map((movie, index) => `<div class="admin-rank-row"><span class="admin-rank">${String(index + 1).padStart(2, '0')}</span><div class="admin-rank-title"><strong>${movie.title || 'Untitled movie'}</strong><span>${movie.views} views</span></div><div class="admin-rank-bar"><i style="width:${Math.min(100, (movie.views / Math.max(1, data.mostWatched[0]?.views || 1)) * 100)}%"></i></div></div>`).join('') || '<div class="admin-empty">No watch history recorded yet.</div>';
+                document.getElementById('adminHistoryRows').innerHTML = (data.recentWatchHistory || []).map(item => `<tr><td><strong>${item.userId?.name || item.userId?.email || 'Unknown user'}</strong></td><td>${item.title || 'Untitled movie'}</td><td>${adminFormatDuration(item.watchDuration)}</td><td><div class="admin-progress"><i style="width:${Math.min(100, Math.max(0, item.progress || 0))}%"></i></div><span class="admin-progress-value">${Math.round(item.progress || 0)}%</span></td></tr>`).join('') || adminEmptyRow(4, 'No watch history recorded yet.');
+            } catch (error) {
+                stats.innerHTML = '<div class="admin-empty admin-error">Unable to load dashboard data. Check the server connection.</div>';
+                document.getElementById('adminActivityRows').innerHTML = adminEmptyRow(5, 'Dashboard data unavailable.');
+                document.getElementById('adminMostWatched').innerHTML = '<div class="admin-empty">Dashboard data unavailable.</div>';
+                document.getElementById('adminHistoryRows').innerHTML = adminEmptyRow(4, 'Dashboard data unavailable.');
+            }
         }
 
         // ─── MOVIE CARD BUILDER ───
@@ -999,6 +1030,20 @@
                 }
                 const inWatchlist = imdbId ? watchlist.some(w => w.imdbId === imdbId) : false;
                 const reviewsKey = imdbId || `tmdb_${id}`;
+                const [receptionResult, reviewsResult] = await Promise.all([
+                    apiRequest(`/api/movies/reception/${encodeURIComponent(id)}`).catch(error => ({ success: false, message: error.message })),
+                    apiRequest(`/api/reviews/${encodeURIComponent(id)}`).catch(error => ({ success: false, message: error.message })),
+                ]);
+                if (reviewsResult.success && Array.isArray(reviewsResult.data)) {
+                    const storedReviews = movieReviews[reviewsKey] || [];
+                    const serverReviews = reviewsResult.data;
+                    const existing = new Set(serverReviews.map(review => `${review.email || ''}:${(review.text || '').trim()}`));
+                    movieReviews[reviewsKey] = [
+                        ...serverReviews,
+                        ...storedReviews.filter(review => !existing.has(`${review.email || ''}:${(review.text || '').trim()}`)),
+                    ];
+                    localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
+                }
                 let html = `
                     <div class="detail-container">
                         <div class="poster-col"><img src="${poster}" alt="${title}" onerror="this.src='${IMG_NA}'" /></div>
@@ -1029,33 +1074,18 @@
                     </div>
                 `;
                 const reviews = movieReviews[reviewsKey] || [];
-                let reviewListHtml = '';
-                if (reviews.length === 0) {
-                    reviewListHtml = `<div class="review-empty"><i class="fas fa-comment-slash"></i> No reviews yet. Be the first to review!</div>`;
-                } else {
-                    reviewListHtml = reviews.map((r, idx) => `
-                        <div class="review-item" data-review-index="${idx}">
-                            <div class="review-header">
-                                <span class="reviewer">${r.name || 'Anonymous'}</span>
-                                <span class="review-stars">${'★'.repeat(r.stars)}${'☆'.repeat(5 - r.stars)}</span>
-                                <span class="review-date">${r.date || 'just now'}</span>
-                            </div>
-                            <div class="review-body">${r.text || ''}</div>
-                            <button class="delete-review-btn" data-review-index="${idx}" title="Delete review"><i class="fas fa-trash"></i></button>
-                        </div>
-                    `).join('');
-                }
                 html += `
+                    ${renderAudienceReception(receptionResult.data, receptionResult.message)}
                     <div class="reviews-section" data-reviews-key="${reviewsKey}">
                         <h3><i class="fas fa-comment-dots"></i> Reviews</h3>
                         <div class="review-form">
                             <div class="star-selector" data-selected="0">
                                 ${[1, 2, 3, 4, 5].map(n => `<span class="star" data-val="${n}">★</span>`).join('')}
                             </div>
-                            <textarea placeholder="Share your thoughts about this movie..." id="detailReviewTextarea"></textarea>
+                            <textarea placeholder="Share your thoughts about this movie..." id="detailReviewTextarea" maxlength="2000"></textarea>
                             <div class="review-actions"><button id="detailSubmitReviewBtn">Submit Review</button></div>
                         </div>
-                        <div class="review-list" id="detailReviewList">${reviewListHtml}</div>
+                        <div class="review-list" id="detailReviewList"></div>
                     </div>
                 `;
                 if (similar.length) {
@@ -1078,6 +1108,7 @@
                     `;
                 }
                 container.innerHTML = html;
+                renderReviews(reviewsKey, id);
 
                 // Events
                 container.querySelector('.btn-watchlist')?.addEventListener('click', function () {
@@ -1147,51 +1178,92 @@
                         const text = textarea.value.trim();
                         if (!text) { toast('Please write a review', 'warning'); return; }
                         if (selectedStars === 0) { toast('Please rate the movie (1–5 stars)', 'warning'); return; }
-                        const key = reviewsKey;
-                        if (!movieReviews[key]) movieReviews[key] = [];
-                        movieReviews[key].push({
-                            name: currentUser?.name || 'Anonymous',
-                            email: currentUser?.email || '',
-                            stars: selectedStars,
-                            text: text,
-                            date: new Date().toLocaleDateString()
+                        const submitButton = this;
+                        submitButton.disabled = true;
+                        apiRequest('/api/reviews', {
+                            method: 'POST',
+                            body: JSON.stringify({ movieId: String(id), stars: selectedStars, text }),
+                        }).then(response => {
+                            if (!movieReviews[reviewsKey]) movieReviews[reviewsKey] = [];
+                            movieReviews[reviewsKey].unshift(response.data);
+                            localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
+                            renderReviews(reviewsKey, id);
+                            textarea.value = '';
+                            selectedStars = 0;
+                            stars.forEach(s => s.classList.remove('active'));
+                            toast('Review submitted and analyzed!', 'success');
+                            refreshAudienceReception(id);
+                        }).catch(error => {
+                            toast(error.message || 'Unable to submit review', 'error');
+                        }).finally(() => {
+                            submitButton.disabled = false;
                         });
-                        localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
-                        renderReviews(key);
-                        textarea.value = '';
-                        selectedStars = 0;
-                        stars.forEach(s => s.classList.remove('active'));
-                        toast('✅ Review submitted!', 'success');
                     });
                 }
-                container.querySelectorAll('.delete-review-btn').forEach(btn => {
-                    btn.addEventListener('click', function (e) {
-                        e.stopPropagation();
-                        const idx = parseInt(this.dataset.reviewIndex);
-                        const key = reviewsKey;
-                        if (!movieReviews[key] || idx >= movieReviews[key].length) return;
-                        const review = movieReviews[key][idx];
-                        if (currentUser && review.name !== currentUser.name && review.email !== currentUser
-                            .email) {
-                            toast('You can only delete your own reviews', 'warning');
-                            return;
-                        }
-                        showConfirmDialog('Delete Review', 'Are you sure you want to delete this review?', () => {
-                            movieReviews[key].splice(idx, 1);
-                            if (movieReviews[key].length === 0) delete movieReviews[key];
-                            localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
-                            renderReviews(key);
-                            toast('🗑️ Review deleted', 'success');
-                        });
-                    });
-                });
+                bindReviewDelete(container, reviewsKey, id);
             } catch (e) {
                 console.error(e);
                 container.innerHTML = '<p style="text-align:center;padding:40px;">Error loading details.</p>';
             }
         }
 
-        function renderReviews(key) {
+        function renderAudienceReception(reception, errorMessage = '') {
+            if (!reception) {
+                return `<section class="audience-reception" id="audienceReception"><div class="audience-heading"><h3><i class="fas fa-chart-line"></i> Audience Reception Prediction</h3></div><p class="audience-unavailable">${escapeHtml(errorMessage || 'Reception data is currently unavailable.')}</p></section>`;
+            }
+            const source = reception.sources || {};
+            const sentiment = reception.sentiment || { percentages: {}, total: 0 };
+            const rating = (item, suffix = '/10') => item?.available && item.rating != null
+                ? `${Number(item.rating).toFixed(1)}${suffix}`
+                : 'Not available';
+            const imdbVotes = source.imdb?.votes ? ` · ${escapeHtml(source.imdb.votes)} votes` : '';
+            const reviewRating = source.reviews?.averageStars == null ? '—' : `${source.reviews.averageStars}/5`;
+            const socialSource = source.social?.source || 'Social';
+            const percentage = sentiment.percentages || {};
+            const statusMessages = [
+                source.imdb?.available ? '' : source.imdb?.message,
+                source.social?.available ? '' : source.social?.message,
+            ].filter(Boolean).map(escapeHtml);
+            return `
+                <section class="audience-reception" id="audienceReception">
+                    <div class="audience-heading">
+                        <div><span class="audience-eyebrow">DATA-DRIVEN FORECAST</span><h3><i class="fas fa-chart-line"></i> Audience Reception Prediction</h3></div>
+                        <div class="audience-score"><strong>${reception.score == null ? '—' : `${Number(reception.score)}<small>/100</small>`}</strong><span>${escapeHtml(reception.prediction || 'Not enough data')}</span></div>
+                    </div>
+                    <div class="audience-confidence">Confidence ${Number(reception.confidence) || 0}% · estimates combine ratings, review sentiment, and available social reactions</div>
+                    <div class="audience-sources">
+                        <div><span>TMDB</span><strong>${rating(source.tmdb)} <small>(${Number(source.tmdb?.votes) || 0} votes)</small></strong></div>
+                        <div><span>IMDb</span><strong>${rating(source.imdb)}<small>${imdbVotes}</small></strong></div>
+                        <div><span>CINEVORA REVIEWS</span><strong>${reviewRating}<small> · ${Number(source.reviews?.count) || 0} reviews</small></strong></div>
+                        <div><span>${escapeHtml(socialSource.toUpperCase())}</span><strong>${Number(source.social?.total) || 0}<small> posts · ${Number(source.social?.engagement) || 0} reactions</small></strong></div>
+                    </div>
+                    <div class="audience-sentiment-heading"><strong>Review & social sentiment</strong><span>${Number(sentiment.total) || 0} weighted signals</span></div>
+                    <div class="sentiment-bars">
+                        ${['positive', 'neutral', 'negative'].map(kind => `
+                            <div class="sentiment-row ${kind}">
+                                <span>${kind}</span><div class="sentiment-track"><i style="width:${Math.max(0, Math.min(100, Number(percentage[kind]) || 0))}%"></i></div>
+                                <strong>${Number(percentage[kind]) || 0}%</strong>
+                            </div>
+                        `).join('')}
+                    </div>
+                    ${statusMessages.length ? `<p class="audience-data-note">${statusMessages.join(' · ')}</p>` : ''}
+                    <p class="audience-disclaimer">Prediction is an estimate based on available ratings and public reactions, not a guarantee of quality.</p>
+                </section>`;
+        }
+
+        async function refreshAudienceReception(movieId) {
+            const panel = document.getElementById('audienceReception');
+            if (!panel) return;
+            try {
+                const result = await apiRequest(`/api/movies/reception/${encodeURIComponent(movieId)}`);
+                panel.outerHTML = renderAudienceReception(result.data);
+            } catch (error) {
+                const note = panel.querySelector('.audience-data-note');
+                if (note) note.textContent = error.message || 'Could not refresh reception prediction.';
+            }
+        }
+
+        function renderReviews(key, movieId) {
             const listContainer = document.getElementById('detailReviewList');
             if (!listContainer) return;
             const reviews = movieReviews[key] || [];
@@ -1203,32 +1275,53 @@
             listContainer.innerHTML = reviews.map((r, idx) => `
                 <div class="review-item" data-review-index="${idx}">
                     <div class="review-header">
-                        <span class="reviewer">${r.name || 'Anonymous'}</span>
+                        <span class="reviewer">${escapeHtml(r.name || 'Anonymous')}</span>
                         <span class="review-stars">${'★'.repeat(r.stars)}${'☆'.repeat(5 - r.stars)}</span>
-                        <span class="review-date">${r.date || 'just now'}</span>
+                        <span class="review-sentiment ${escapeHtml(r.sentiment || 'neutral')}">${escapeHtml(r.sentiment || 'neutral')}</span>
+                        <span class="review-date">${escapeHtml(r.date || (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'just now'))}</span>
                     </div>
-                    <div class="review-body">${r.text || ''}</div>
+                    <div class="review-body">${escapeHtml(r.text || '')}</div>
                     <button class="delete-review-btn" data-review-index="${idx}" title="Delete review"><i class="fas fa-trash"></i></button>
                 </div>
             `).join('');
-            listContainer.querySelectorAll('.delete-review-btn').forEach(btn => {
-                btn.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    const idx = parseInt(this.dataset.reviewIndex);
-                    if (!movieReviews[key] || idx >= movieReviews[key].length) return;
-                    const review = movieReviews[key][idx];
-                    if (currentUser && review.name !== currentUser.name && review.email !== currentUser
-                        .email) {
-                        toast('You can only delete your own reviews', 'warning');
-                        return;
-                    }
-                    showConfirmDialog('Delete Review', 'Are you sure you want to delete this review?', () => {
-                        movieReviews[key].splice(idx, 1);
-                        if (movieReviews[key].length === 0) delete movieReviews[key];
+        }
+
+        function bindReviewDelete(container, key, movieId) {
+            const listContainer = container.querySelector('#detailReviewList');
+            if (!listContainer || listContainer.dataset.deleteBound) return;
+            listContainer.dataset.deleteBound = 'true';
+            listContainer.addEventListener('click', event => {
+                const button = event.target.closest('.delete-review-btn');
+                if (!button) return;
+                event.stopPropagation();
+                const index = Number(button.dataset.reviewIndex);
+                const reviews = movieReviews[key] || [];
+                const review = reviews[index];
+                if (!review) return;
+                if (!review._id && currentUser && review.name !== currentUser.name && review.email !== currentUser.email) {
+                    toast('You can only delete your own reviews', 'warning');
+                    return;
+                }
+                showConfirmDialog('Delete Review', 'Are you sure you want to delete this review?', async () => {
+                    try {
+                        if (review._id) {
+                            await apiRequest('/api/reviews', {
+                                method: 'DELETE',
+                                body: JSON.stringify({ movieId: String(movieId), reviewId: review._id }),
+                            });
+                        } else {
+                            reviews.splice(index, 1);
+                            localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
+                        }
+                        reviews.splice(index, review._id ? 1 : 0);
+                        if (!reviews.length) delete movieReviews[key];
                         localStorage.setItem('cineverse_reviews', JSON.stringify(movieReviews));
-                        renderReviews(key);
-                        toast('🗑️ Review deleted', 'success');
-                    });
+                        renderReviews(key, movieId);
+                        toast('Review deleted', 'success');
+                        refreshAudienceReception(movieId);
+                    } catch (error) {
+                        toast(error.message || 'Unable to delete review', 'error');
+                    }
                 });
             });
         }
@@ -1784,46 +1877,43 @@
             const inp = document.getElementById('globalSearch');
             const sugg = document.getElementById('searchSuggest');
             if (!inp) return;
+            let searchTimer;
+            let searchRequest = 0;
             inp.addEventListener('input', function () {
                 const val = this.value.trim();
                 if (val === '') {
                     sugg.style.display = 'none';
                     if (currentPage === 'browse') loadBrowse(); return;
                 }
-                const funcName = sanitizeQuery(val);
-                if (!funcName) return;
-                const callback = `imdb$${funcName}`;
-                window[callback] = function (obj) {
-                    sugg.style.display = 'none';
-                    recordSearch(val);
-                    if (obj && obj.d && obj.d.length > 0) {
-                        const results = obj.d.filter(r => r.id && r.id.slice(0, 2) !== 'nm' && !r.id.includes('/') && r
-                            .qid !== 'musicvideo');
-                        const filteredResults = results.filter(r => !isBlockedMovie(r.l));
-                        if (filteredResults.length > 0) {
-                            navigateTo('browse');
-                            const grid = document.getElementById('browseGrid');
-                            grid.innerHTML = '';
-                            for (const r of filteredResults.slice(0, 12)) {
-                                const card = createMovieCardFromImdb(r);
-                                if (card) grid.appendChild(card);
-                            }
-                            document.getElementById('browseSubtitle').textContent =
-                                `Showing ${filteredResults.length} results for "${val}"`;
-                        } else { toast('No movie results found', 'warning'); }
-                    } else { if (currentPage === 'browse') loadBrowse(); }
-                    try { delete window[callback]; } catch (e) { }
-                };
-                try { delete window[lastSearchFunc]; } catch (e) { }
-                lastSearchFunc = callback;
-                document.querySelectorAll('.imdb-script').forEach(n => n.remove());
-                const script = document.createElement('script');
-                script.src = `https://sg.media-imdb.com/suggests/${funcName[0]}/${encodeURIComponent(funcName)}.json`;
-                script.className = 'imdb-script';
-                script.onerror = () => { toast('Search failed', 'error'); };
-                document.head.appendChild(script);
+                if (val.length < 2) { sugg.style.display = 'none'; return; }
+                clearTimeout(searchTimer);
                 sugg.style.display = 'flex';
                 sugg.innerHTML = `<div class="suggest-empty"><i class="fas fa-spinner fa-spin"></i> Searching…</div>`;
+                const requestId = ++searchRequest;
+                searchTimer = setTimeout(async () => {
+                    try {
+                        const data = await api.tmdb.search(val);
+                        if (requestId !== searchRequest) return;
+                        const results = filterBlockedMovies(data?.results || []);
+                        sugg.style.display = 'none';
+                        if (!results.length) {
+                            if (currentPage === 'browse') loadBrowse();
+                            else toast('No movie results found', 'warning');
+                            return;
+                        }
+                        recordSearch(val);
+                        navigateTo('browse');
+                        const grid = document.getElementById('browseGrid');
+                        grid.innerHTML = '';
+                        results.slice(0, 12).forEach(movie => grid.appendChild(createMovieCardFromImdb(movie)));
+                        document.getElementById('browseSubtitle').textContent =
+                            `Showing ${Math.min(results.length, 12)} results for "${val}"`;
+                    } catch (error) {
+                        if (requestId !== searchRequest) return;
+                        sugg.style.display = 'none';
+                        toast(error.message || 'Search failed', 'error');
+                    }
+                }, 250);
             });
             inp.addEventListener('focus', function () {
                 if (this.value.trim() !== '') this.dispatchEvent(new Event(
@@ -1847,10 +1937,10 @@
         function createMovieCardFromImdb(result) {
             const card = document.createElement('div');
             card.className = 'movie-card';
-            const title = result.l || 'Untitled';
-            const year = result.y || '';
-            const rating = result.v || '—';
-            const imgSrc = result.i ? `https://img.omdbapi.com/?i=${result.id}&apikey=${OMDb_KEY}` : IMG_NA;
+            const title = result.title || 'Untitled';
+            const year = getYear(result.release_date);
+            const rating = Number(result.vote_average) ? Number(result.vote_average).toFixed(1) : '—';
+            const imgSrc = result.poster_path ? getPoster(result.poster_path) : IMG_NA;
             card.innerHTML = `
                 <div class="poster-wrap">
                     <img class="poster" src="${imgSrc}" loading="lazy" alt="${title}" onerror="this.src='${IMG_NA}';this.classList.add('fallback')" />
@@ -1859,7 +1949,7 @@
                 </div>
                 <div class="info"><h4>${title}</h4><div class="sub"><span>${year}</span><span class="rating"><i class="fas fa-star"></i> ${rating}</span></div></div>
             `;
-            card.addEventListener('click', () => { if (result.id) openDetailByImdb(result.id); });
+            card.addEventListener('click', () => { if (result.id) navigateTo('detail', { id: result.id, type: 'movie' }); });
             return card;
         }
 
@@ -2020,6 +2110,7 @@
             document.querySelectorAll('#navLinksContainer button').forEach(btn => {
                 btn.addEventListener('click', () => navigateTo(btn.dataset.page));
             });
+            document.getElementById('adminRefreshBtn')?.addEventListener('click', loadAdminDashboard);
             document.getElementById('clearHistoryBtn')?.addEventListener('click', clearAllHistory);
             document.getElementById('backToTopBtn')?.addEventListener('click', () => {
                 window.scrollTo({ top: 0, behavior: 'smooth' });

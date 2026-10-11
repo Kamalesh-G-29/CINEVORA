@@ -1,13 +1,24 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
 const Review = require('../models/Review');
+const { classifySentiment } = require('../services/sentiment');
 
 // Get reviews for a movie
 router.get('/:movieId', async (req, res) => {
+  if (!/^\d{1,12}$/.test(req.params.movieId)) {
+    return res.status(400).json({ success: false, message: 'A valid TMDB movie ID is required' });
+  }
   try {
     const reviews = await Review.find({ movieId: req.params.movieId }).sort({ createdAt: -1 });
-    res.json({ success: true, data: reviews });
+    res.json({
+      success: true,
+      data: reviews.map(review => ({
+        ...review.toObject(),
+        sentiment: classifySentiment(review.text),
+      })),
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -27,14 +38,21 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const { movieId, stars, text } = req.body;
-    if (!movieId || !stars || !text) {
-      return res.status(400).json({ success: false, message: 'Missing fields' });
+    if (!/^\d{1,12}$/.test(String(movieId || ''))) {
+      return res.status(400).json({ success: false, message: 'A valid TMDB movie ID is required' });
+    }
+    if (!Number.isInteger(Number(stars)) || Number(stars) < 1 || Number(stars) > 5) {
+      return res.status(400).json({ success: false, message: 'Stars must be an integer from 1 to 5' });
+    }
+    if (typeof text !== 'string' || !text.trim() || text.trim().length > 2000) {
+      return res.status(400).json({ success: false, message: 'Review text must be between 1 and 2000 characters' });
     }
     const review = new Review({
       userId: req.user._id,
-      movieId,
-      stars,
-      text,
+      movieId: String(movieId),
+      stars: Number(stars),
+      text: text.trim(),
+      sentiment: classifySentiment(text),
       name: req.user.name,
       email: req.user.email,
     });
@@ -52,9 +70,13 @@ router.delete('/', auth, async (req, res) => {
     if (!movieId || reviewId === undefined) {
       return res.status(400).json({ success: false, message: 'movieId and reviewId required' });
     }
-    // If reviewId is numeric index, we need to find by userId and movieId, then remove by index
-    // But we store _id, so we can use findByIdAndDelete with ownership check
-    const review = await Review.findOne({ _id: reviewId, userId: req.user._id });
+    if (!/^\d{1,12}$/.test(String(movieId))) {
+      return res.status(400).json({ success: false, message: 'A valid TMDB movie ID is required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(reviewId)) {
+      return res.status(400).json({ success: false, message: 'A valid review ID is required' });
+    }
+    const review = await Review.findOne({ _id: reviewId, userId: req.user._id, movieId: String(movieId) });
     if (!review) {
       return res.status(404).json({ success: false, message: 'Review not found or not owned' });
     }

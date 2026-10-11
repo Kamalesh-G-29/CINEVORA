@@ -20,6 +20,12 @@ const ReviewSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
+    maxlength: 2000,
+  },
+  sentiment: {
+    type: String,
+    enum: ['positive', 'neutral', 'negative'],
+    default: 'neutral',
   },
   name: String,   // denormalized for quick display
   email: String,  // denormalized
