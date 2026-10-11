@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const auth = require('../middleware/auth');
+const Session = require('../models/Session');
 
 // ─── REGISTER ──────────────────────────────────────────────
 router.post('/register', async (req, res) => {
@@ -74,8 +75,15 @@ router.post('/login', async (req, res) => {
     }
 
     // Generate JWT
+    const session = await Session.create({
+      userId: user._id,
+      device: req.get('user-agent') || 'unknown',
+    });
+    user.lastLogin = session.loginTime;
+    await user.save();
+
     const token = jwt.sign(
-      { id: user._id },
+      { id: user._id, sessionId: session._id },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -86,7 +94,8 @@ router.post('/login', async (req, res) => {
       user: {
         id: user._id,
         email: user.email,
-        name: user.name
+        name: user.name,
+        role: user.role,
       }
     });
   } catch (err) {
@@ -95,6 +104,27 @@ router.post('/login', async (req, res) => {
       success: false,
       message: err.message
     });
+  }
+});
+
+// ─── LOGOUT (Protected) ───────────────────────────────────
+router.post('/logout', auth, async (req, res) => {
+  try {
+    const session = await Session.findOne({
+      _id: req.sessionId,
+      userId: req.user._id,
+      active: true,
+    });
+    if (session) {
+      const logoutTime = new Date();
+      session.logoutTime = logoutTime;
+      session.duration = Math.max(0, Math.floor((logoutTime - session.loginTime) / 1000));
+      session.active = false;
+      await session.save();
+    }
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

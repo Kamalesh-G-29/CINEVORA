@@ -14,6 +14,7 @@ module.exports = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
     req.user = user;
+    req.sessionId = decoded.sessionId;
     next();
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Invalid token' });

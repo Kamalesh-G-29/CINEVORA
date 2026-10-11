@@ -88,6 +88,7 @@
         let playerStatusText = null;
         let currentMovieData = null;
         let currentServerIndex = 0;
+        let playbackStartedAt = null;
 
         // ─── SEED DEMO USER ───
         if (!usersDB.some(u => u.email === 'admin@cineverse.com')) {
@@ -107,6 +108,25 @@
 
         function fetchJSON(url) {
             return fetch(url).then(r => r.json()).catch(() => null);
+        }
+
+        function apiRequest(url, options = {}) {
+            const token = localStorage.getItem('cinevora_token');
+            const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+            if (token) headers.Authorization = `Bearer ${token}`;
+            return fetch(url, { ...options, headers }).then(async response => {
+                const data = await response.json().catch(() => null);
+                if (!response.ok) throw new Error(data?.message || 'Request failed');
+                return data;
+            });
+        }
+
+        function recordSearch(query) {
+            if (!currentUser || !localStorage.getItem('cinevora_token') || !query) return;
+            apiRequest('/api/search-history', {
+                method: 'POST',
+                body: JSON.stringify({ query })
+            }).catch(() => { });
         }
 
         function getPoster(path) { return path ? IMG_BASE + path : IMG_NA; }
@@ -174,6 +194,7 @@
                     year: getYear(m.release_date),
                     poster: getPoster(m.poster_path),
                     vote_average: m.vote_average || 0,
+                    imdb_id: details?.imdb_id || '',
                     runtime: details?.runtime || 0,
                     genres: (details?.genres || []).map(g => g.name).slice(0, 3).join(', ')
                 });
@@ -230,41 +251,114 @@
             if (pieChartInstance) { pieChartInstance.destroy(); pieChartInstance = null; }
         }
 
-        function generateComparison() {
+        async function generateComparison() {
             if (compareMovies.length < 2) {
                 toast('Add at least 2 movies to compare', 'warning');
                 return;
             }
 
             const resultsDiv = document.getElementById('compareResults');
-            resultsDiv?.classList.add('active');
-
-            const scores = compareMovies.map(movie => {
-                const base = Math.min(10, (movie.vote_average || 0) + 1.5);
-                const categoryScores = COMPARE_CATEGORIES.map((cat, idx) => {
-                    const correlation = 0.3 + (idx / COMPARE_CATEGORIES.length) * 0.5;
-                    const variation = (Math.random() - 0.5) * 2.5;
-                    let score = Math.min(10, Math.max(1, base * correlation + (10 - base * correlation) * 0.3 + variation));
-                    if (Math.random() > 0.6) score = Math.min(10, score + 1.5);
-                    if (Math.random() > 0.8) score = Math.min(10, score - 1);
-                    return Math.round(score * 10) / 10;
+            try {
+                const response = await fetch('/api/movies/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ movies: compareMovies.map(movie => movie.title) })
                 });
-                return { movie, scores: categoryScores };
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message || 'Comparison failed');
+                resultsDiv?.classList.add('active');
+
+                const scores = data.movies.map(result => {
+                    const movie = compareMovies.find(item => item.title.toLowerCase() === result.title.toLowerCase()) || { title: result.title };
+                    const categoryScores = COMPARE_CATEGORIES.map((category, index) => {
+                        const pillarValues = Object.values(result.scores);
+                        return pillarValues[index % pillarValues.length];
+                    });
+                    return {
+                        movie,
+                        pillars: {
+                            social: result.scores.social_buzz,
+                            sentiment: result.scores.comment_sentiment,
+                            audience: result.scores.verified_ratings,
+                            craft: result.scores.screenplay_craft,
+                            theatrical: result.scores.theatrical_value
+                        },
+                        verdict: result.composite_score,
+                        scores: categoryScores,
+                        result
+                    };
+                });
+
+                const averages = scores.map(s => s.verdict / 10);
+                const bestIdx = scores.reduce((best, score, idx) => score.verdict > scores[best].verdict ? idx : best, 0);
+                const winner = scores[bestIdx].movie;
+                const lowest = scores.reduce((worst, score, idx) => score.verdict < scores[worst].verdict ? idx : worst, 0);
+                document.getElementById('winnerBadge').textContent = `Winner: ${data.comparison_summary.winner} · ${scores[bestIdx].verdict.toFixed(1)}/100`;
+
+                destroyCharts();
+                renderVerdictTable(scores);
+                renderVerdictTakeaway(scores[bestIdx], scores[lowest]);
+                renderRadarChart(scores);
+                renderBarChart(scores);
+                renderPieChart(scores, averages);
+                renderRankingList(scores, averages);
+
+                compareResults = { scores, averages, winner, summary: data.comparison_summary };
+                toast('Comparison generated!', 'success');
+            } catch (error) {
+                console.error('Comparison error', error);
+                toast(error.message || 'Unable to generate comparison', 'error');
+            }
+        }
+
+        function roundScore(value) {
+            return Math.round(Math.max(0, Math.min(10, value)) * 10) / 10;
+        }
+
+        function scoreFromSeed(seed, minimum, range) {
+            let hash = 0;
+            for (let idx = 0; idx < seed.length; idx++) hash = ((hash << 5) - hash + seed.charCodeAt(idx)) | 0;
+            return roundScore(minimum + (Math.abs(hash) % 1000) / 1000 * range);
+        }
+
+        function verdictClassification(score) {
+            if (score >= 85) return 'MUST WATCH';
+            if (score >= 75) return 'GOOD';
+            if (score >= 65) return 'ABOVE AVERAGE';
+            if (score >= 50) return 'AVERAGE';
+            return 'BAD / SKIP';
+        }
+
+        function renderVerdictTable(scores) {
+            const container = document.getElementById('verdictTableWrap');
+            if (!container) return;
+            const columns = [
+                ['social', 'Social buzz'],
+                ['sentiment', 'Comment sentiment'],
+                ['audience', 'Verified ratings'],
+                ['craft', 'Screenplay craft'],
+                ['theatrical', 'Theatrical value']
+            ];
+            let html = '<div class="verdict-table-scroll"><table class="verdict-table"><thead><tr><th>Metric / score out of 10</th>';
+            scores.forEach(item => { html += `<th>${item.movie.title}</th>`; });
+            html += '</tr></thead><tbody>';
+            columns.forEach(([key, label]) => {
+                html += `<tr><th>${label}<span>Five-pillar model input</span></th>`;
+                scores.forEach(item => { html += `<td>${item.pillars[key].toFixed(1)}<small>/10</small></td>`; });
+                html += '</tr>';
             });
+            html += '<tr class="verdict-total"><th>Composite Verdict Score<span>20% + 25% + 25% + 15% + 15%</span></th>';
+            scores.forEach(item => { html += `<td>${item.verdict.toFixed(1)}<small>/100</small><em>${verdictClassification(item.verdict)}</em></td>`; });
+            html += '</tr></tbody></table></div><p class="data-note">Scores use verified movie metadata where available. Social buzz and comment sentiment remain modelled proxies until live social and forum connectors are configured.</p>';
+            container.innerHTML = html;
+        }
 
-            const averages = scores.map(s => s.scores.reduce((a, b) => a + b, 0) / s.scores.length);
-            const bestIdx = averages.indexOf(Math.max(...averages));
-            const winner = scores[bestIdx].movie;
-            document.getElementById('winnerBadge').textContent = `🏆 Winner: ${winner.title}`;
-
-            destroyCharts();
-            renderRadarChart(scores);
-            renderBarChart(scores);
-            renderPieChart(scores, averages);
-            renderRankingList(scores, averages);
-
-            compareResults = { scores, averages, winner };
-            toast('✅ Comparison generated!', 'success');
+        function renderVerdictTakeaway(winner, lowest) {
+            const container = document.getElementById('verdictTakeaway');
+            if (!container) return;
+            const winnerLead = Math.max(...Object.values(winner.pillars));
+            const lowestDrop = Math.min(...Object.values(lowest.pillars));
+            container.innerHTML = `<strong>Key takeaway</strong><span>${winner.movie.title} led with a ${winner.verdict.toFixed(1)}/100 composite, powered by a strongest pillar of ${winnerLead.toFixed(1)}/10; ${lowest.movie.title} ranked lowest at ${lowest.verdict.toFixed(1)}/100 because its weakest pillar fell to ${lowestDrop.toFixed(1)}/10.</span>`;
         }
 
         function renderRadarChart(scores) {
@@ -1143,6 +1237,16 @@
         function startPlaybackFromMovie(movie) {
             if (!movie || !movie.imdbId) { toast('No playable source found', 'error'); return; }
             addToRecentlyViewed(movie);
+            playbackStartedAt = Date.now();
+            apiRequest('/api/history/watch/start', {
+                method: 'POST',
+                body: JSON.stringify({
+                    movieId: movie.imdbId,
+                    title: movie.title,
+                    year: movie.year,
+                    poster: movie.poster
+                })
+            }).catch(() => { });
             const serverIndex = parseInt(playerServerSelect?.value || '0');
             const streamUrl = STREAM_SOURCES[serverIndex].url(movie.imdbId);
             openVideoPlayer(streamUrl, movie);
@@ -1272,6 +1376,20 @@
         }
 
         function closeVideoPlayer() {
+            if (currentMovieData?.imdbId && playbackStartedAt && localStorage.getItem('cinevora_token')) {
+                const watchDuration = Math.floor((Date.now() - playbackStartedAt) / 1000);
+                apiRequest('/api/history/watch/update', {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        movieId: currentMovieData.imdbId,
+                        watchDuration,
+                        progress: 0,
+                        completed: false
+                    })
+                }).catch(() => { });
+            }
+            playbackStartedAt = null;
+            currentMovieData = null;
             if (playerModal) {
                 playerModal.classList.remove('active');
                 document.body.style.overflow = '';
@@ -1295,6 +1413,7 @@
                 const params = { sort_by: sortBy, 'vote_count.gte': 100, page: 1 };
                 if (selectedLanguage !== 'all') params.with_original_language = selectedLanguage;
                 if (query) {
+                    recordSearch(query);
                     const searchParams = { query };
                     if (selectedLanguage !== 'all') searchParams.with_original_language = selectedLanguage;
                     data = await api.tmdb.search(query, searchParams);
@@ -1676,6 +1795,7 @@
                 const callback = `imdb$${funcName}`;
                 window[callback] = function (obj) {
                     sugg.style.display = 'none';
+                    recordSearch(val);
                     if (obj && obj.d && obj.d.length > 0) {
                         const results = obj.d.filter(r => r.id && r.id.slice(0, 2) !== 'nm' && !r.id.includes('/') && r
                             .qid !== 'musicvideo');
@@ -1827,7 +1947,7 @@
                         localStorage.setItem('cinevora_token', data.token);
                         let userInLocal = usersDB.find(u => u.email === data.user.email);
                         if (!userInLocal) {
-                            userInLocal = { email: data.user.email, name: data.user.name, password: pass };
+                            userInLocal = { email: data.user.email, name: data.user.name, password: pass, role: data.user.role };
                             usersDB.push(userInLocal);
                             localStorage.setItem('cineverse_users', JSON.stringify(usersDB));
                         }
@@ -1888,7 +2008,9 @@
                 if (e.key === 'Enter') document.getElementById('doLoginBtn').click();
             });
             document.getElementById('logoutAppBtn').addEventListener('click', () => {
+                apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => { });
                 currentUser = null;
+                localStorage.removeItem('cinevora_token');
                 localStorage.removeItem('remSession');
                 document.getElementById('loginPanel').style.display = 'flex';
                 document.getElementById('appDashboard').style.display = 'none';

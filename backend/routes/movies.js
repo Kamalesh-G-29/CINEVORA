@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const fetch = require('node-fetch');
 const { getYear, isBlocked } = require('../utils/helpers');
+const { compareMovies } = require('../services/movieComparison');
+const { getCinevoraComparison } = require('../services/geminiComparison');
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 const getApiKey = () => process.env.TMDB_API_KEY || '7248c5cc1f2080c7baf7361d2427fb80';
@@ -90,6 +92,43 @@ router.get('/search/:query', async (req, res) => {
     res.json({ success: true, results: filterMovies(data.results) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post('/compare', async (req, res) => {
+  try {
+    const titles = req.body?.movies || req.body?.titles;
+    if (!Array.isArray(titles) || titles.length < 2 || titles.length > 5) {
+      return res.status(400).json({ success: false, message: 'Provide an array of 2 to 5 movie titles' });
+    }
+    const normalizedTitles = titles.map(title => typeof title === 'string' ? title.trim() : '');
+    if (normalizedTitles.some(title => !title || title.length > 200)) {
+      return res.status(400).json({ success: false, message: 'Each movie title must be a non-empty string under 200 characters' });
+    }
+    if (new Set(normalizedTitles.map(title => title.toLowerCase())).size !== normalizedTitles.length) {
+      return res.status(400).json({ success: false, message: 'Movie titles must be unique' });
+    }
+    const comparison = await compareMovies({
+      titles: normalizedTitles,
+      searchMovie: title => tmdbFetch('/search/movie', { query: title }),
+      getDetails: id => tmdbFetch(`/movie/${id}`, { append_to_response: 'videos,credits' }),
+    });
+    return res.json(comparison);
+  } catch (err) {
+    return res.status(502).json({ success: false, message: err.message });
+  }
+});
+
+router.post('/compare-ai', async (req, res) => {
+  try {
+    const titles = req.body?.movies || req.body?.titles;
+    if (!Array.isArray(titles) || titles.length < 2 || titles.length > 5) {
+      return res.status(400).json({ message: 'Provide an array of 2 to 5 movie titles' });
+    }
+    return res.json(await getCinevoraComparison(titles));
+  } catch (err) {
+    const status = err.message === 'GEMINI_API_KEY is not configured' ? 503 : 502;
+    return res.status(status).json({ message: err.message });
   }
 });
 
