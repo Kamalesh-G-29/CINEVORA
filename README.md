@@ -1,66 +1,62 @@
-CINEVORA — Movie Comparison & Discovery Platform
-CINEVORA lets users browse, search, compare, and review movies. It includes a movie reception forecast that combines TMDB and IMDb ratings with sentiment from CINEVORA reviews and, when configured, public Reddit posts.
+# CINEVORA — Movie Comparison & Discovery Platform
 
-Features
-User authentication with JWT
-Browse trending, top-rated, new releases, and popular movies
-Search with autocomplete and voice support
-Movie detail pages with cast, crew, recommendations, and reviews
-Audience reception prediction (0–100), source ratings, review sentiment, and social sentiment
-Personal watchlist and viewing history
-Compare up to 5 movies across 12 categories with interactive charts
-32 color themes and a video player with multiple server sources
-Tech stack
-Backend: Node.js, Express, MongoDB/Mongoose, TMDB API
-Frontend: HTML, CSS, JavaScript, Chart.js, Font Awesome
-Sentiment: Local, lexicon-based classification; user review text is not sent to third-party services
-Optional social source: Reddit's official OAuth API
-Setup
-Requirements
-Node.js 18 or newer
-MongoDB (local or hosted)
-A TMDB API key
-Optional: an OMDb API key for IMDb ratings
-Optional: a Reddit app with OAuth credentials for social reactions
-Install
-From the repository root:
+CINEVORA is a web-based movie discovery platform that allows users to browse, search, compare, and review movies using a simple and responsive interface built with HTML, CSS, and JavaScript.
 
-npm install
-npm install --prefix backend
-Create backend/.env from backend/.env.example and set the values:
+## Features
 
-PORT=5000
-MONGODB_URI=mongodb://localhost:27017/cinevora
-JWT_SECRET=use-a-long-random-secret
-TMDB_API_KEY=your-tmdb-api-key
-OMDB_API_KEY=your-omdb-api-key
-REDDIT_CLIENT_ID=your-reddit-app-id
-REDDIT_CLIENT_SECRET=your-reddit-app-secret
-REDDIT_USER_AGENT=CINEVORA/1.0 (contact: you@example.com)
-TMDB_API_KEY is required for movie browsing and predictions. OMDB_API_KEY enables IMDb ratings. Reddit credentials are optional; without them the prediction still uses available ratings and CINEVORA reviews. The app reports unavailable sources instead of treating missing data as zero. Keep .env private and never commit API credentials.
+- Browse trending, top-rated, popular, and newly released movies.
+- Search for movies with autocomplete and voice search support.
+- View movie details, cast, crew, genres, ratings, and recommendations when available through the movie API.
+- Compare up to five movies across multiple categories with interactive charts.
+- Estimate audience reception using available movie ratings and review sentiment.
+- Save watchlists and viewing history locally in the browser.
+- Customize the interface with 32 color themes.
+- Play videos using available video sources.
+- Responsive design for desktop, tablet, and mobile devices.
 
-Run
-Start MongoDB, then run from the repository root:
+## Technology Stack
 
-npm start
-Open http://localhost:5000. For automatic backend restarts during development, use npm run dev.
+- **Frontend:** HTML5, CSS3, JavaScript
+- **Movie Data:** TMDB API
+- **Charts:** Chart.js
+- **Icons:** Font Awesome
+- **Browser Storage:** LocalStorage
+- **Voice Search:** Web Speech API, where supported
 
-The browser uses the same-origin API when served by Express. When using a local static server such as VS Code Live Server, it automatically calls http://localhost:5000. The optional js/config.js setting is reserved for the deployed API URL; never put TMDB, MongoDB, JWT, Gemini, OMDb, or Reddit credentials in frontend files.
+## Setup
 
-Deployment
-The backend can be deployed to Render and the static frontend to GitHub Pages. The checked-in render.yaml configures the backend service, MongoDB readiness check, and Pages CORS origin. Create a MongoDB Atlas database and provide its connection string and the TMDB API key in Render's environment settings; the blueprint generates JWT_SECRET. Optional integrations can be added there as well. Configure Atlas network access to allow Render connections. Do not commit backend/.env or enter secrets as GitHub repository variables.
+### Requirements
 
-After creating the Render service from this repository, copy its HTTPS service URL (for example, https://cinevora-api.onrender.com) into the GitHub repository variable CINEVORA_API_BASE_URL under Settings → Secrets and variables → Actions → Variables. Then enable GitHub Pages with GitHub Actions as the build and deployment source. The Pages workflow injects only that public base URL into js/config.js; server credentials remain on Render.
+- A modern web browser
+- Visual Studio Code
+- Live Server extension for local development
+- A TMDB API key for movie data
 
-Push the deployment changes from the repository root:
+### Installation
 
-git add README.md index.html js/app.js js/config.js backend/config/database.js backend/server.js backend/.env.example render.yaml .github/workflows/pages.yml
-git commit -m "Fix movie API routing and deployment configuration"
-git push origin main
-The Pages URL for this repository is https://kamalesh-g-29.github.io/Movie-Streaming-Application/. The API will be available at <your-render-service-url>/api/movies/trending; verify <your-render-service-url>/api/health reports {"status":"ok","database":"connected"} after deployment.
+1. Download or clone the CINEVORA repository.
+2. Open the project folder in Visual Studio Code.
+3. Configure the TMDB API URL and key according to the API's security requirements.
+4. Install the Live Server extension if needed.
+5. Open `index.html` using Live Server.
 
-Audience reception score
-The backend caches external source snapshots for six hours. The score is a weighted estimate: TMDB rating (35%), IMDb rating (35%), CINEVORA review sentiment (15%), and Reddit post sentiment (15%). Reddit post sentiment is weighted by each post's score and comment count. Missing components are excluded and the remaining weights are normalized. Sentiment is classified as positive, neutral, or negative; the detail page shows percentages, source ratings, sample counts, and a confidence indicator. It is an estimate, not a guarantee of audience response.
+## Deployment
 
-The public prediction endpoint is GET /api/movies/reception/:tmdbMovieId. Reviews are stored in MongoDB and classified when submitted through the authenticated POST /api/reviews endpoint.
+CINEVORA's static frontend can be deployed using GitHub Pages.
 
+1. Push the HTML, CSS, and JavaScript files to GitHub.
+2. Open the repository's **Settings → Pages**.
+3. Select the `main` branch and the appropriate folder.
+4. Save the settings and open the generated website URL.
+
+## Important Notes
+
+- LocalStorage stores watchlists and viewing history in the current browser; this data is not automatically synchronized across devices.
+- Features requiring secure user authentication, shared reviews, or a database need a backend service.
+- Movie information requires a working TMDB API connection.
+- Never expose private API credentials in public JavaScript files.
+- Audience reception estimates depend on the data sources actually available and should not be treated as guaranteed predictions.
+
+## Project Goal
+
+The goal of CINEVORA is to provide a user-friendly movie discovery and comparison experience using core web technologies without relying on heavy frontend frameworks.
